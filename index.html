@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Device Usage Tracker Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+<!-- Chart.js CDN -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{
+  margin:0;
+  font-family: 'Segoe UI', Roboto, Arial;
+  background: radial-gradient(circle at top, #1a1f2b, #0d0f16);
+  color:#e9ecf5;
+}
+header{
+  padding:18px 28px;
+  font-size:1.4rem;
+  font-weight:600;
+  background:linear-gradient(135deg,#1f2b45aa,#151b28aa);
+  backdrop-filter: blur(8px);
+  border-bottom:1px solid #22283b;
+}
+.container{padding:20px 26px;}
+button,input{
+  background:rgba(255,255,255,0.06);
+  border:1px solid rgba(255,255,255,0.12);
+  color:#fff;
+  padding:8px 12px;
+  border-radius:14px;
+}
+button:hover,input:hover{
+  background:rgba(255,255,255,0.12);
+  cursor:pointer;
+}
+.section-title{margin:20px 0 10px 0;font-size:1.1rem;opacity:.85;}
+.cards{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:16px;
+}
+.card{
+  padding:16px;
+  border-radius:20px;
+  background:linear-gradient(135deg,rgba(50,60,90,.45),rgba(20,25,40,.45));
+  backdrop-filter:blur(10px);
+  box-shadow:0 12px 28px rgba(0,0,0,.25);
+  position:relative;
+  overflow:hidden;
+}
+.card .label{font-size:.85rem;opacity:.75;}
+.card .value{font-size:1.6rem;font-weight:700;margin-top:6px;}
+.glow{
+  position:absolute;
+  inset:-40% -40%;
+  background:conic-gradient(from 0deg,#7cf2ff33,#b39dff33,#ff89c633,#7cf2ff33);
+  filter:blur(40px);
+  z-index:-1;
+  animation:spin 10s linear infinite;
+}
+@keyframes spin{to{transform:rotate(360deg);}}
+.grid-2{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(340px,1fr));
+  gap:24px;
+}
+.chart-box{
+  padding:16px;
+  border-radius:20px;
+  background:linear-gradient(135deg,rgba(40,50,80,.45),rgba(15,18,28,.45));
+  box-shadow:0 12px 28px rgba(0,0,0,.25);
+}
+table{
+  width:100%;
+  border-collapse:collapse;
+  margin-top:10px;
+  border-radius:16px;
+  overflow:hidden;
+}
+thead{
+  background:linear-gradient(135deg,#232d45,#1a2235);
+}
+th,td{
+  padding:10px 12px;
+  font-size:.85rem;
+}
+tbody tr:nth-child(odd){background:rgba(255,255,255,0.03);}
+tbody tr:hover{background:rgba(255,255,255,0.08);}
+.filters{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin:10px 0 20px 0;
+}
+footer{padding:10px 20px;font-size:.75rem;opacity:.6;text-align:center;}
+</style>
+</head>
+<body>
+<header>📊 Device Usage Tracker Dashboard</header>
+
+<div class="container">
+
+  <div class="filters">
+    <label>Upload Daily Log Files (JSON):
+      <input id="fileInput" type="file" multiple webkitdirectory />
+    </label>
+    <label>From: <input type="date" id="startDate"></label>
+    <label>To: <input type="date" id="endDate"></label>
+    <label>Device Filter: <input type="text" id="deviceFilter" placeholder="Hostname / MAC"></label>
+    <button id="applyFilters">Apply Filters</button>
+    <button id="exportCSV">Export Summary CSV</button>
+  </div>
+
+  <div class="section-title">Summary</div>
+  <div class="cards">
+    <div class="card">
+      <div class="glow"></div>
+      <div class="label">Total Devices</div>
+      <div class="value" id="totalDevices">0</div>
+    </div>
+    <div class="card">
+      <div class="glow"></div>
+      <div class="label">Total Usage Minutes</div>
+      <div class="value" id="totalMinutes">0</div>
+    </div>
+    <div class="card">
+      <div class="glow"></div>
+      <div class="label">Most Used Device</div>
+      <div class="value" id="topDevice">—</div>
+    </div>
+    <div class="card">
+      <div class="glow"></div>
+      <div class="label">Latest Log Date</div>
+      <div class="value" id="latestDate">—</div>
+    </div>
+  </div>
+
+  <div class="section-title">Charts</div>
+  <div class="grid-2">
+    <div class="chart-box"><canvas id="barChart"></canvas></div>
+    <div class="chart-box"><canvas id="lineChart"></canvas></div>
+    <div class="chart-box"><canvas id="pieChart"></canvas></div>
+  </div>
+
+  <div class="section-title">Device Table</div>
+  <div class="chart-box">
+    <table id="deviceTable">
+      <thead>
+        <tr>
+          <th>Device Name</th>
+          <th>Total Usage Minutes</th>
+          <th>Average Daily Usage</th>
+          <th>First Seen</th>
+          <th>Last Seen</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+
+</div>
+
+<footer>Local JSON logs • Client-side only • No backend used</footer>
+
+<script>
+let rawLogs = [];
+let aggregated = {};
+let barChart, lineChart, pieChart;
+
+document.getElementById("fileInput").addEventListener("change", async (e)=>{
+  const files = [...e.target.files].filter(f=>f.name.endsWith(".json"));
+  rawLogs = [];
+  for(const file of files){
+    const text = await file.text();
+    try{
+      const json = JSON.parse(text);
+      rawLogs.push({date:file.name.replace(".json",""), data:json});
+    }catch(err){console.error("Invalid JSON in",file.name);}
+  }
+  processAndRender();
+});
+
+document.getElementById("applyFilters").onclick = ()=>processAndRender();
+document.getElementById("deviceFilter").oninput = ()=>processAndRender();
+
+function withinDateRange(dateStr){
+  const s = document.getElementById("startDate").value;
+  const e = document.getElementById("endDate").value;
+  if(s && dateStr < s) return false;
+  if(e && dateStr > e) return false;
+  return true;
+}
+
+function processAndRender(){
+  aggregated = {};
+  let latestDate = "";
+
+  rawLogs.forEach(day=>{
+    if(!withinDateRange(day.date)) return;
+    latestDate = latestDate < day.date ? day.date : latestDate;
+
+    day.data.forEach(entry=>{
+      const key = entry.Hostname || entry.MAC || "Unknown";
+      if(!aggregated[key]){
+        aggregated[key] = {
+          hostname: entry.Hostname || entry.MAC,
+          mac: entry.MAC || "",
+          total:0,
+          dates:new Set(),
+          firstSeen:entry["Last Seen"],
+          lastSeen:entry["Last Seen"]
+        };
+      }
+      aggregated[key].total += Number(entry["Usage Minutes"]||0);
+      aggregated[key].dates.add(day.date);
+
+      const lastSeen = entry["Last Seen"];
+      if(lastSeen < aggregated[key].firstSeen) aggregated[key].firstSeen = lastSeen;
+      if(lastSeen > aggregated[key].lastSeen) aggregated[key].lastSeen = lastSeen;
+    });
+  });
+
+  const deviceFilter = document.getElementById("deviceFilter").value.toLowerCase();
+  let filtered = Object.values(aggregated).filter(d=>!deviceFilter || (d.hostname||"").toLowerCase().includes(deviceFilter));
+
+  // summaries
+  const totalDevices = filtered.length;
+  const totalMinutes = filtered.reduce((a,b)=>a+b.total,0);
+  const topDeviceObj = filtered.sort((a,b)=>b.total-a.total)[0];
+  const topDevice = topDeviceObj ? topDeviceObj.hostname : "—";
+
+  animateValue("totalDevices", totalDevices);
+  animateValue("totalMinutes", totalMinutes);
+  document.getElementById("topDevice").textContent = topDevice;
+  document.getElementById("latestDate").textContent = latestDate || "—";
+
+  renderTable(filtered);
+  renderCharts(filtered);
+}
+
+function renderTable(data){
+  const tbody = document.querySelector("#deviceTable tbody");
+  tbody.innerHTML = "";
+  data.forEach(d=>{
+    const avg = d.total / d.dates.size || 0;
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${d.hostname||"Unknown"}</td>
+      <td>${d.total.toFixed(0)}</td>
+      <td>${avg.toFixed(1)}</td>
+      <td>${d.firstSeen||"—"}</td>
+      <td>${d.lastSeen||"—"}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function renderCharts(data){
+  const labels = data.map(d=>d.hostname||"Unknown");
+  const totals = data.map(d=>d.total);
+
+  // destroy old
+  [barChart,lineChart,pieChart].forEach(c=>c && c.destroy());
+
+  const barCtx = document.getElementById("barChart");
+  barChart = new Chart(barCtx,{
+    type:"bar",
+    data:{labels,datasets:[{label:"Total Usage Minutes",data:totals}]},
+    options:{responsive:true}
+  });
+
+  const lineCtx = document.getElementById("lineChart");
+  lineChart = new Chart(lineCtx,{
+    type:"line",
+    data:{labels,datasets:[{label:"Total Usage Minutes",data:totals,fill:false}]},
+    options:{responsive:true}
+  });
+
+  const pieCtx = document.getElementById("pieChart");
+  pieChart = new Chart(pieCtx,{
+    type:"doughnut",
+    data:{labels,datasets:[{label:"Share",data:totals}]},
+    options:{responsive:true}
+  });
+}
+
+// counter animation
+function animateValue(id, end){
+  const el = document.getElementById(id);
+  const start = Number(el.textContent)||0;
+  const duration = 800;
+  const startTime = performance.now();
+  function frame(now){
+    const p = Math.min((now-startTime)/duration,1);
+    const value = Math.floor(start + (end-start)*p);
+    el.textContent = value;
+    if(p<1) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+// export CSV
+document.getElementById("exportCSV").onclick = ()=>{
+  const rows = [["Device","Total Usage Minutes","Avg Daily Usage","First Seen","Last Seen"]];
+  Object.values(aggregated).forEach(d=>{
+    rows.push([
+      d.hostname||"Unknown",
+      d.total,
+      (d.total/d.dates.size||0).toFixed(1),
+      d.firstSeen||"",
+      d.lastSeen||""
+    ]);
+  });
+  const csv = rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv],{type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href=url;
+  a.download="device_usage_summary.csv";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+</script>
+</body>
+</html>
